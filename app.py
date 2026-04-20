@@ -24,16 +24,16 @@ MYSQL_DB       = os.getenv("MYSQL_DB")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 def cleanup_image(image_bytes):
+    """Lightweight image preprocessing"""
     nparr = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    denoised = cv2.fastNlMeansDenoising(gray, h=10)
-    enhanced = cv2.equalizeHist(denoised)
-    kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
-    sharpened = cv2.filter2D(enhanced, -1, kernel)
-    _, thresh = cv2.threshold(sharpened, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)   # Use grayscale from beginning to save memory
+    
+    # Simple but effective preprocessing
+    denoised = cv2.fastNlMeansDenoising(img, h=8)
+    _, thresh = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     cleaned = cv2.bitwise_not(thresh)
-    _, buffer = cv2.imencode('.jpg', cleaned, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    
+    _, buffer = cv2.imencode('.jpg', cleaned, [cv2.IMWRITE_JPEG_QUALITY, 85])  # Lower quality to save memory
     return buffer.tobytes()
 
 @app.route('/analyze', methods=['POST'])
@@ -56,7 +56,7 @@ Level 3: Can do both equations but treats them as a list of steps. Uses only one
 Level 4: Understands the relationship between the two equations. Chooses the optimal method most of the time.
 Level 5: Can generalize. Sees the "structure" of the equation instantly and predicts the most efficient path.
 
-Return **ONLY** clean JSON:
+Return **ONLY** clean JSON in this exact format:
 
 {
   "problem": "the original two equations",
@@ -71,7 +71,7 @@ Analyze the image and output only the JSON."""
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-2.5-flash",   # Keep using this, but with lighter image
             contents=[
                 system_prompt,
                 {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(cleaned_bytes).decode("utf-8")}}
@@ -99,8 +99,8 @@ Analyze the image and output only the JSON."""
             "extracted_steps": "Not extracted",
             "level": 0,
             "level_name": "Error",
-            "justification": "AI failed to read handwriting",
-            "feedback": "The AI could not read the handwriting clearly. Please use brighter lighting, darker pen, and take the photo from directly above the paper."
+            "justification": "Processing failed",
+            "feedback": "The AI could not read the handwriting. Please try a clearer photo with brighter lighting and darker pen."
         }
 
     # Save to MySQL
