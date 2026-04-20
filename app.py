@@ -83,7 +83,7 @@ Feedback rules:
         }
 
         response = client.models.generate_content(
-            model="gemini-2.5-flash",        # ← Changed to more stable model
+            model="gemini-2.5-flash-lite",        # ← Changed to more stable model
             contents=[system_prompt, image_part]
         )
 
