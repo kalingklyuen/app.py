@@ -1,4 +1,4 @@
-# app.py  (Corrected version for Gemini 2026)
+# app.py - Fixed Gemini Version for Handwritten Math Tutor
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -10,8 +10,7 @@ import os
 from datetime import datetime
 import json
 
-# New correct import for Gemini (2026 SDK)
-from google import genai
+from google import genai   # Correct import
 
 app = Flask(__name__)
 CORS(app)
@@ -24,7 +23,6 @@ MYSQL_PASS = os.getenv("MYSQL_PASS")
 MYSQL_DB   = os.getenv("MYSQL_DB")
 # ========================================================
 
-# Initialize Gemini client
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 def cleanup_image(image_bytes):
@@ -36,7 +34,7 @@ def cleanup_image(image_bytes):
     _, thresh = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     cleaned = cv2.bitwise_not(thresh)
     
-    _, buffer = cv2.imencode('.jpg', cleaned)
+    _, buffer = cv2.imencode('.jpg', cleaned, [cv2.IMWRITE_JPEG_QUALITY, 95])
     return buffer.tobytes()
 
 def save_to_mysql(student_id, level, extracted_steps, feedback):
@@ -67,47 +65,67 @@ def analyze():
 
     system_prompt = """You are an expert Simultaneous Equations tutor using Biggs & Collis (1982) SOLO Taxonomy.
 
-Extract from the image:
-- The original problem (two linear equations)
-- The student's full handwritten steps
+Carefully analyze the handwritten image.
+Extract:
+- The original problem (the system of equations)
+- All the student's handwritten steps
 
-Classify strictly into ONE level (1-5) and return **clean JSON only**:
+Then classify the student's mastery level strictly into ONE level (1-5):
+
+1. Pre-structural (Foundational Gap)
+2. Uni-structural (Isolated Step)
+3. Multi-structural (Procedural Rigidity)
+4. Relational (Strategic Explorer)
+5. Extended Abstract (Strategic Master)
+
+Return **only clean JSON**, no extra text or explanation:
 
 {
-  "problem": "...",
-  "extracted_steps": "...",
-  "level": 3,
-  "level_name": "Multi-structural (Procedural Rigidity)",
-  "justification": "One-sentence reason",
-  "feedback": "Detailed scaffolding..."
+  "problem": "the two equations",
+  "extracted_steps": "summary of what student wrote",
+  "level": 4,
+  "level_name": "Relational (Strategic Explorer)",
+  "justification": "short reason",
+  "feedback": "detailed scaffolding according to the level"
 }
 
 Feedback rules:
-• Levels 1-2: Direct scaffolding on isolating variables & inverse operations
-• Levels 3-4: Strategic efficiency & path of least resistance
-• Level 5: Problem-posing for extended mastery
+- Level 1-2: Direct hints on isolating variables and inverse operations
+- Level 3-4: Compare student's method with "Path of Least Resistance"
+- Level 5: Give problem-posing prompts for deeper mastery
 """
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",   # or "gemini-3-flash" if available
-            contents=[system_prompt, {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(cleaned_bytes).decode('utf-8')}}]
+            model="gemini-2.5-flash",   # Good balance of speed + vision quality
+            contents=[
+                system_prompt,
+                {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(cleaned_bytes).decode("utf-8")}}
+            ]
         )
 
         raw_text = response.text.strip()
 
-        # Clean JSON if Gemini adds markdown
-        if "```json" in raw_text:
-            raw_text = raw_text.split("```json")[1].split("```")[0]
-        elif "```" in raw_text:
-            raw_text = raw_text.split("```")[1]
+        # Clean possible markdown
+        if raw_text.startswith("```json"):
+            raw_text = raw_text.split("```json")[1].split("```")[0].strip()
+        elif raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1].strip()
 
         result = json.loads(raw_text)
 
     except Exception as e:
         print("Gemini Error:", str(e))
-        result = {"error": "AI processing failed", "details": str(e)}
+        result = {
+            "error": "AI processing failed",
+            "problem": "Cannot read image",
+            "extracted_steps": str(e),
+            "level": 0,
+            "level_name": "Error",
+            "feedback": "Please try taking a clearer photo with better lighting."
+        }
 
+    # Save to MySQL
     save_to_mysql(
         student_id=student_id,
         level=result.get("level", 0),
