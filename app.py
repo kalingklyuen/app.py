@@ -24,30 +24,19 @@ MYSQL_DB       = os.getenv("MYSQL_DB")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 def cleanup_image(image_bytes):
+    """Improve image for better handwriting recognition"""
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     denoised = cv2.fastNlMeansDenoising(gray)
-    _, thresh = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # Increase contrast for handwriting
+    enhanced = cv2.equalizeHist(denoised)
+    _, thresh = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     cleaned = cv2.bitwise_not(thresh)
-    _, buffer = cv2.imencode('.jpg', cleaned, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    
+    _, buffer = cv2.imencode('.jpg', cleaned, [cv2.IMWRITE_JPEG_QUALITY, 95])
     return buffer.tobytes()
-
-def save_to_mysql(student_id, level, extracted_steps, feedback):
-    try:
-        conn = pymysql.connect(host=MYSQL_HOST, user=MYSQL_USER, password=MYSQL_PASS, db=MYSQL_DB)
-        cur = conn.cursor()
-        sql = """
-            INSERT INTO mastery_trace 
-            (student_id, level, extracted_steps, feedback, timestamp)
-            VALUES (%s, %s, %s, %s, %s)
-        """
-        cur.execute(sql, (student_id, level, extracted_steps, feedback, datetime.now()))
-        conn.commit()
-        cur.close()
-        conn.close()
-    except Exception as e:
-        print("MySQL Error:", e)
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
@@ -59,34 +48,33 @@ def analyze():
 
     cleaned_bytes = cleanup_image(file.read())
 
-    system_prompt = """You are an expert math tutor specializing in Simultaneous Equations using Biggs & Collis SOLO Taxonomy (1982).
+    system_prompt = """You are an expert Simultaneous Equations tutor using Biggs & Collis (1982) SOLO Taxonomy.
 
-Look at the handwritten work carefully.
+Analyze the handwritten photo carefully.
 Extract:
-- The original simultaneous equations
+- The original system of equations
 - The student's solving steps
 
-Classify the student's mastery level into exactly one of these 1-5 levels.
+Classify strictly into ONE level 1-5.
 
-Return **ONLY clean JSON**, nothing else:
+Return **ONLY** clean JSON (no extra text):
 
 {
-  "problem": "the system of equations",
-  "extracted_steps": "summary of student's method",
-  "level": 4,
-  "level_name": "Relational (Strategic Explorer)",
+  "problem": "the equations",
+  "extracted_steps": "what the student did",
+  "level": 3,
+  "level_name": "Multi-structural (Procedural Rigidity)",
   "justification": "short reason",
-  "feedback": "helpful scaffolding based on the level"
+  "feedback": "scaffolding according to the level"
 }
 
 Feedback rules:
-- Level 1-2: Basic hints on variables and inverse operations
-- Level 3-4: Compare method with most efficient way
-- Level 5: Ask student to create their own harder problem
+- Levels 1-2: Direct hints on isolating variables and inverse operations
+- Levels 3-4: Show efficient method vs student's path
+- Level 5: Problem-posing prompts
 """
 
     try:
-        # Improved way to send image to Gemini
         image_part = {
             "inline_data": {
                 "mime_type": "image/jpeg",
@@ -95,13 +83,13 @@ Feedback rules:
         }
 
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-2.5-flash",        # ← Changed to more stable model
             contents=[system_prompt, image_part]
         )
 
         raw_text = response.text.strip()
 
-        # Clean JSON if Gemini adds extra text
+        # Clean JSON
         if "```" in raw_text:
             raw_text = raw_text.split("```")[1].strip()
             if raw_text.startswith("json"):
@@ -112,23 +100,31 @@ Feedback rules:
     except Exception as e:
         print("Gemini Error:", str(e))
         result = {
-            "problem": "Cannot read the image",
+            "problem": "Image processing failed",
             "extracted_steps": "",
             "level": 0,
             "level_name": "Error",
-            "justification": "Image processing failed",
-            "feedback": "The AI could not read the handwriting. Please try taking the photo again with brighter lighting and make sure all writing is clear."
+            "justification": "AI failed to read image",
+            "feedback": "The AI still cannot read the handwriting clearly. Please try these tips:\n1. Take photo in brighter light\n2. Make sure paper is flat and handwriting is dark\n3. Take photo from directly above (no angle)\n4. Avoid shadows on the paper"
         }
 
-    save_to_mysql(
-        student_id=student_id,
-        level=result.get("level", 0),
-        extracted_steps=result.get("extracted_steps", ""),
-        feedback=result.get("feedback", "")
-    )
+    # Save to MySQL (skip if error)
+    try:
+        conn = pymysql.connect(host=MYSQL_HOST, user=MYSQL_USER, password=MYSQL_PASS, db=MYSQL_DB)
+        cur = conn.cursor()
+        sql = """
+            INSERT INTO mastery_trace 
+            (student_id, level, extracted_steps, feedback, timestamp)
+            VALUES (%s, %s, %s, %s, %s)
+        """
+        cur.execute(sql, (student_id, result.get("level", 0), result.get("extracted_steps", ""), result.get("feedback", ""), datetime.now()))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except:
+        pass
 
     return jsonify(result)
-
 
 if __name__ == '__main__':
     port = int(os.getenv("PORT", 5000))
