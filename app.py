@@ -24,16 +24,12 @@ MYSQL_DB       = os.getenv("MYSQL_DB")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 def cleanup_image(image_bytes):
-    """Lightweight image preprocessing"""
     nparr = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)   # Use grayscale from beginning to save memory
-    
-    # Simple but effective preprocessing
+    img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)   # Save memory
     denoised = cv2.fastNlMeansDenoising(img, h=8)
     _, thresh = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     cleaned = cv2.bitwise_not(thresh)
-    
-    _, buffer = cv2.imencode('.jpg', cleaned, [cv2.IMWRITE_JPEG_QUALITY, 85])  # Lower quality to save memory
+    _, buffer = cv2.imencode('.jpg', cleaned, [cv2.IMWRITE_JPEG_QUALITY, 85])
     return buffer.tobytes()
 
 @app.route('/analyze', methods=['POST'])
@@ -48,15 +44,15 @@ def analyze():
 
     system_prompt = """You are an expert Simultaneous Equations tutor using Biggs & Collis (1982) SOLO Taxonomy.
 
-Classify the student's mastery level strictly into ONE of these 5 levels:
+Classify strictly into ONE level:
 
 Level 1: Student misses the point. Cannot solve a single linear equation (e.g. 2x=10).
 Level 2: Can solve one equation but cannot "link" them.
 Level 3: Can do both equations but treats them as a list of steps. Uses only one method regardless of difficulty.
-Level 4: Understands the relationship between the two equations. Chooses the optimal method most of the time.
-Level 5: Can generalize. Sees the "structure" of the equation instantly and predicts the most efficient path.
+Level 4: Understands the relationship. Chooses the optimal method most of the time.
+Level 5: Can generalize. Sees the "structure" instantly and predicts the most efficient path.
 
-Return **ONLY** clean JSON in this exact format:
+Return **ONLY** clean JSON:
 
 {
   "problem": "the original two equations",
@@ -71,7 +67,7 @@ Analyze the image and output only the JSON."""
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",   # Keep using this, but with lighter image
+            model="gemini-2.5-flash",
             contents=[
                 system_prompt,
                 {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(cleaned_bytes).decode("utf-8")}}
@@ -99,8 +95,8 @@ Analyze the image and output only the JSON."""
             "extracted_steps": "Not extracted",
             "level": 0,
             "level_name": "Error",
-            "justification": "Processing failed",
-            "feedback": "The AI could not read the handwriting. Please try a clearer photo with brighter lighting and darker pen."
+            "justification": "AI failed to read handwriting",
+            "feedback": "The AI could not read the handwriting clearly. Please use brighter lighting, darker pen, and take the photo from directly above the paper."
         }
 
     # Save to MySQL
@@ -117,7 +113,7 @@ Analyze the image and output only the JSON."""
         cur.close()
         conn.close()
     except Exception as db_e:
-        print("MySQL Error:", db_e)
+        print("MySQL Error:", str(db_e))
 
     return jsonify(result)
 
