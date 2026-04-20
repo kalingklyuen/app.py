@@ -8,8 +8,7 @@ import os
 from datetime import datetime
 import json
 
-# New imports for OCR fallback
-import easyocr
+import easyocr   # ← Added
 
 from google import genai
 
@@ -27,7 +26,7 @@ MYSQL_DB       = os.getenv("MYSQL_DB")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Initialize EasyOCR (English + Chinese)
-reader = easyocr.Reader(['en', 'ch_sim'], gpu=False)
+reader = easyocr.Reader(['en', 'ch_sim'], gpu=False, download_enabled=True)
 
 def cleanup_image(image_bytes):
     nparr = np.frombuffer(image_bytes, np.uint8)
@@ -62,21 +61,21 @@ Level 3: Can do both equations but treats them as a list of steps. Uses only one
 Level 4: Understands the relationship between the two equations. Chooses the optimal method most of the time.
 Level 5: Can generalize. Sees the "structure" of the equation instantly and predicts the most efficient path.
 
-Return **ONLY** clean JSON:
+Return **ONLY** clean JSON in this exact format:
 
 {
   "problem": "the original two equations",
-  "extracted_steps": "summary of student's steps",
-  "level": number 1-5,
+  "extracted_steps": "summary of student's solving steps",
+  "level": number,
   "level_name": "exact level name",
   "justification": "short reason",
   "feedback": "helpful scaffolding"
 }
 
-Now analyze and output only the JSON."""
+Analyze and output only the JSON."""
 
     try:
-        # First try Gemini Vision
+        # Primary: Gemini Vision
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=[
@@ -87,7 +86,6 @@ Now analyze and output only the JSON."""
 
         raw_text = response.text.strip()
 
-        # Clean JSON
         if "```" in raw_text:
             raw_text = raw_text.split("```")[1].strip()
             if raw_text.startswith("json"):
@@ -100,32 +98,39 @@ Now analyze and output only the JSON."""
 
         result = json.loads(raw_text)
 
-    except Exception as e:
-        print("Gemini Vision failed, trying OCR fallback:", str(e))
-        
-        # Fallback: Use EasyOCR to extract text
+    except Exception as vision_error:
+        print("Gemini Vision failed, using OCR fallback:", str(vision_error))
+
+        # Fallback: EasyOCR
         try:
             img_array = cv2.imdecode(np.frombuffer(cleaned_bytes, np.uint8), cv2.IMREAD_COLOR)
-            ocr_result = reader.readtext(img_array, detail=0)
-            extracted_text = " ".join(ocr_result)
+            ocr_results = reader.readtext(img_array, detail=0)
+            extracted_text = "\n".join(ocr_results)
 
-            # Send extracted text to Gemini for classification
-            text_prompt = f"""Here is the extracted text from student's handwritten simultaneous equations:
+            text_prompt = f"""Here is the extracted text from a student's handwritten simultaneous equations:
 
 {extracted_text}
 
-Classify the student's mastery level using the SOLO Taxonomy and return ONLY JSON in the same format as before."""
+Classify the student's mastery level using Biggs & Collis SOLO Taxonomy and return ONLY clean JSON in the same format as above."""
 
-            response = client.chat.completions.create(
+            response = client.models.generate_content(
                 model="gemini-2.5-flash",
-                messages=[{"role": "user", "content": text_prompt}]
+                contents=[text_prompt]
             )
 
             raw_text = response.text.strip()
+            # Clean again
+            if "```" in raw_text:
+                raw_text = raw_text.split("```")[1].strip()
+            if "{" in raw_text and "}" in raw_text:
+                start = raw_text.find("{")
+                end = raw_text.rfind("}") + 1
+                raw_text = raw_text[start:end]
+
             result = json.loads(raw_text)
 
-        except Exception as fallback_error:
-            print("OCR Fallback also failed:", str(fallback_error))
+        except Exception as ocr_error:
+            print("OCR Fallback also failed:", str(ocr_error))
             result = {
                 "problem": "Not detected",
                 "extracted_steps": "Not extracted",
