@@ -46,28 +46,31 @@ def analyze():
     cleaned_bytes = cleanup_image(file.read())
 
     # Stronger, more precise prompt
-    system_prompt = """You are an expert Simultaneous Equations tutor using Biggs & Collis (1982) SOLO Taxonomy.
+   system_prompt = """You are an expert Simultaneous Equations tutor using Biggs & Collis (1982) SOLO Taxonomy.
 
-Carefully analyze the handwritten work and classify the student's mastery level **strictly** into ONE of these 5 levels:
+Classify the student's mastery level strictly into ONE of these 5 levels:
 
-- Level 1 (Pre-structural): Student cannot solve even a single linear equation like 2x=10.
-- Level 2 (Uni-structural): Can solve one equation but cannot link the two equations together.
-- Level 3 (Multi-structural): Can solve both equations but treats them as separate steps. Uses only one rigid method (usually substitution or elimination) no matter the difficulty.
-- Level 4 (Relational): Understands the relationship between the two equations. Chooses the better method depending on the problem (shows flexibility).
-- Level 5 (Extended Abstract): Sees the deep structure instantly, can predict the most efficient path, and can generalize or create new problems.
+Level 1: Student misses the point. Cannot solve a single linear equation (e.g. 2x=10).
+Level 2: Can solve one equation but cannot "link" them.
+Level 3: Can do both equations but treats them as a list of steps. Uses only one method regardless of difficulty.
+Level 4: Understands the relationship between the two equations. Chooses the optimal method most of the time.
+Level 5: Can generalize. Sees the "structure" of the equation instantly and predicts the most efficient path.
 
-Return **ONLY** clean JSON, nothing else:
+For Levels 3, 4, and 5, also generate a simple text-based flow chart.
+
+Return **ONLY** clean JSON:
 
 {
   "problem": "the original two equations",
-  "extracted_steps": "clear summary of what the student did",
-  "level": number from 1 to 5,
+  "extracted_steps": "summary of student's solving steps",
+  "level": number,
   "level_name": "exact level name",
-  "justification": "one short sentence explaining why this level",
-  "feedback": "helpful scaffolding and next steps"
+  "justification": "short reason",
+  "feedback": "helpful scaffolding",
+  "flowchart": "text-based flow chart (only for level 3,4,5). Use simple arrows like → or |"
 }
 
-Now analyze the image carefully and output only the JSON."""
+Now analyze the image and output only the JSON."""
 
     try:
         response = client.models.generate_content(
