@@ -26,13 +26,32 @@ MYSQL_DB       = os.getenv("MYSQL_DB")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 def cleanup_image(image_bytes):
+    """Improved image preprocessing for better handwriting recognition"""
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    
+    # Convert to grayscale
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    denoised = cv2.fastNlMeansDenoising(gray)
+    
+    # Denoise
+    denoised = cv2.fastNlMeansDenoising(gray, h=10)
+    
+    # Increase contrast significantly
     enhanced = cv2.equalizeHist(denoised)
-    _, thresh = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # Sharpen the image (very helpful for handwriting)
+    kernel = np.array([[-1, -1, -1],
+                       [-1,  9, -1],
+                       [-1, -1, -1]])
+    sharpened = cv2.filter2D(enhanced, -1, kernel)
+    
+    # Threshold to make text clearer
+    _, thresh = cv2.threshold(sharpened, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # Invert for better visibility
     cleaned = cv2.bitwise_not(thresh)
+    
+    # Save with high quality
     _, buffer = cv2.imencode('.jpg', cleaned, [cv2.IMWRITE_JPEG_QUALITY, 95])
     return buffer.tobytes()
 
@@ -46,38 +65,40 @@ def analyze():
 
     cleaned_bytes = cleanup_image(file.read())
 
-    # === YOUR EXACT SOLO TAXONOMY CRITERIA ===
+    # Strong prompt with your exact SOLO criteria
     system_prompt = """You are an expert Simultaneous Equations tutor using Biggs & Collis (1982) SOLO Taxonomy.
 
-Classify the student's mastery level strictly into ONE of these 5 levels based on the handwritten work:
+Carefully analyze the handwritten work in the image.
 
-Level 1 (Pre-structural / Foundational Gap):
+Classify the student's mastery level strictly into ONE of these 5 levels:
+
+Level 1 (Pre-structural / Foundational Gap): 
 Student misses the point. Cannot solve a single linear equation (e.g. 2x=10).
 
-Level 2 (Uni-structural / Isolated Step):
-Focuses on one relevant part. Can solve one equation but cannot "link" them.
+Level 2 (Uni-structural / Isolated Step): 
+Can solve one equation but cannot "link" the two equations.
 
-Level 3 (Multi-structural / Procedural Rigidity):
-Can do both equations but treats them as a list of steps. Uses only one method (e.g., Substitution) regardless of difficulty.
+Level 3 (Multi-structural / Procedural Rigidity): 
+Can do both equations but treats them as a list of steps. Uses only one method (e.g. Substitution) regardless of difficulty.
 
-Level 4 (Relational / Strategic Explorer):
+Level 4 (Relational / Strategic Explorer): 
 Understands the relationship between the two equations. Chooses the optimal method most of the time.
 
-Level 5 (Extended Abstract / Strategic Master):
+Level 5 (Extended Abstract / Strategic Master): 
 Can generalize. Sees the "structure" of the equation instantly and predicts the most efficient path.
 
-Return **ONLY** clean JSON in this exact format. No extra text, no markdown, no explanation:
+Return **ONLY** clean JSON in this exact format. No extra text:
 
 {
-  "problem": "the original two equations clearly written",
-  "extracted_steps": "clear summary of what the student wrote and did",
-  "level": number from 1 to 5,
-  "level_name": "exact level name as shown above",
-  "justification": "one short sentence explaining why this level",
-  "feedback": "helpful scaffolding and next steps according to the level"
+  "problem": "the original two equations",
+  "extracted_steps": "clear summary of student's solving steps",
+  "level": number (1-5),
+  "level_name": "exact level name",
+  "justification": "short reason for this level",
+  "feedback": "helpful scaffolding according to the level"
 }
 
-Now carefully analyze the handwritten image and output only the JSON."""
+Now analyze the image and output only the JSON."""
 
     try:
         response = client.models.generate_content(
@@ -115,8 +136,8 @@ Now carefully analyze the handwritten image and output only the JSON."""
             "extracted_steps": "Not extracted",
             "level": 0,
             "level_name": "Error",
-            "justification": "AI failed to return valid JSON",
-            "feedback": "The AI could not parse the handwriting properly. Please try a clearer photo with better lighting and darker handwriting."
+            "justification": "AI failed to parse handwriting",
+            "feedback": "The AI could not read the handwriting clearly. Please try a clearer photo with better lighting, darker pen, and take the photo from directly above the paper."
         }
 
     # Save to MySQL
@@ -138,22 +159,18 @@ Now carefully analyze the handwritten image and output only the JSON."""
     return jsonify(result)
 
 
-# Dashboard Route
+# Dashboard (optional)
 @app.route('/dashboard', methods=['GET'])
 def dashboard():
     try:
         conn = pymysql.connect(host=MYSQL_HOST, user=MYSQL_USER, password=MYSQL_PASS, db=MYSQL_DB)
         cur = conn.cursor()
-        cur.execute("""
-            SELECT id, student_id, level, extracted_steps, feedback, timestamp 
-            FROM mastery_trace 
-            ORDER BY timestamp DESC
-        """)
+        cur.execute("SELECT id, student_id, level, extracted_steps, feedback, timestamp FROM mastery_trace ORDER BY timestamp DESC")
         rows = cur.fetchall()
         cur.close()
         conn.close()
 
-        html = "<h2>📊 Student Mastery Trace Dashboard</h2><table border='1' cellpadding='8' cellspacing='0'><tr><th>ID</th><th>Student ID</th><th>Level</th><th>Steps</th><th>Feedback</th><th>Time</th></tr>"
+        html = "<h2>Student Mastery Trace Dashboard</h2><table border='1' cellpadding='8'><tr><th>ID</th><th>Student</th><th>Level</th><th>Steps</th><th>Feedback</th><th>Time</th></tr>"
         for row in rows:
             html += f"<tr><td>{row[0]}</td><td>{row[1]}</td><td>Level {row[2]}</td><td>{str(row[3])[:100]}...</td><td>{str(row[4])[:100]}...</td><td>{row[5]}</td></tr>"
         html += "</table>"
