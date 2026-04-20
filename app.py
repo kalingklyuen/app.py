@@ -11,7 +11,13 @@ import json
 from google import genai
 
 app = Flask(__name__)
-CORS(app)
+
+# === STRONG CORS FOR WIX ===
+CORS(app, 
+     origins=["*"],
+     methods=["GET", "POST", "OPTIONS"],
+     allow_headers=["Content-Type", "Authorization"],
+     supports_credentials=True)
 
 # ========================= CONFIG =========================
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -58,12 +64,7 @@ The JSON must follow this exact structure:
   "feedback": "Write the scaffolding feedback here"
 }
 
-Classify level using Biggs & Collis SOLO Taxonomy:
-1 = Pre-structural (Foundational Gap)
-2 = Uni-structural (Isolated Step)
-3 = Multi-structural (Procedural Rigidity)
-4 = Relational (Strategic Explorer)
-5 = Extended Abstract (Strategic Master)
+Classify level using Biggs & Collis SOLO Taxonomy (1-5).
 
 Now analyze the image and output only the JSON."""
 
@@ -83,10 +84,10 @@ Now analyze the image and output only the JSON."""
 
         raw_text = response.text.strip()
 
-        if "```json" in raw_text:
-            raw_text = raw_text.split("```json")[1].split("```")[0].strip()
-        elif "```" in raw_text:
+        if "```" in raw_text:
             raw_text = raw_text.split("```")[1].strip()
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:].strip()
 
         if "{" in raw_text and "}" in raw_text:
             start = raw_text.find("{")
@@ -103,7 +104,7 @@ Now analyze the image and output only the JSON."""
             "level": 0,
             "level_name": "Error",
             "justification": "AI failed to return valid JSON",
-            "feedback": "The AI could not parse the handwriting properly. Please try a clearer photo with brighter lighting and darker handwriting."
+            "feedback": "The AI could not parse the handwriting properly."
         }
 
     # Save to MySQL
@@ -125,57 +126,25 @@ Now analyze the image and output only the JSON."""
     return jsonify(result)
 
 
-# ====================== DASHBOARD ======================
 @app.route('/dashboard', methods=['GET'])
 def dashboard():
     try:
-        conn = pymysql.connect(
-            host=MYSQL_HOST,
-            user=MYSQL_USER,
-            password=MYSQL_PASS,
-            db=MYSQL_DB
-        )
+        conn = pymysql.connect(host=MYSQL_HOST, user=MYSQL_USER, password=MYSQL_PASS, db=MYSQL_DB)
         cur = conn.cursor()
-        cur.execute("""
-            SELECT id, student_id, level, extracted_steps, feedback, timestamp 
-            FROM mastery_trace 
-            ORDER BY timestamp DESC
-        """)
+        cur.execute("SELECT id, student_id, level, extracted_steps, feedback, timestamp FROM mastery_trace ORDER BY timestamp DESC")
         rows = cur.fetchall()
         cur.close()
         conn.close()
 
-        html = """
-        <h2>📊 Student Mastery Trace Dashboard</h2>
-        <table border="1" cellpadding="10" cellspacing="0" style="border-collapse: collapse; width:100%;">
-            <tr style="background-color: #f0f0f0;">
-                <th>ID</th>
-                <th>Student ID</th>
-                <th>SOLO Level</th>
-                <th>Extracted Steps</th>
-                <th>Feedback</th>
-                <th>Time</th>
-            </tr>
-        """
+        html = "<h2>Student Mastery Trace Dashboard</h2><table border='1' cellpadding='8'><tr><th>ID</th><th>Student</th><th>Level</th><th>Steps</th><th>Feedback</th><th>Time</th></tr>"
         for row in rows:
-            html += f"""
-            <tr>
-                <td>{row[0]}</td>
-                <td>{row[1]}</td>
-                <td><b>Level {row[2]}</b></td>
-                <td>{row[3][:150]}...</td>
-                <td>{row[4][:200]}...</td>
-                <td>{row[5]}</td>
-            </tr>
-            """
+            html += f"<tr><td>{row[0]}</td><td>{row[1]}</td><td>Level {row[2]}</td><td>{row[3][:100]}...</td><td>{row[4][:100]}...</td><td>{row[5]}</td></tr>"
         html += "</table>"
         return html
-
     except Exception as e:
-        return f"<h2>Database Error:</h2><p>{str(e)}</p>"
+        return f"<h2>Error:</h2><p>{str(e)}</p>"
 
 
-# ====================== START SERVER ======================
 if __name__ == '__main__':
     port = int(os.getenv("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
