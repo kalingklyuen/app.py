@@ -24,13 +24,11 @@ MYSQL_DB       = os.getenv("MYSQL_DB")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 def cleanup_image(image_bytes):
+    """Lightweight image preprocessing"""
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
-    denoised = cv2.fastNlMeansDenoising(img, h=10)
-    enhanced = cv2.equalizeHist(denoised)
-    kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
-    sharpened = cv2.filter2D(enhanced, -1, kernel)
-    _, thresh = cv2.threshold(sharpened, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    denoised = cv2.fastNlMeansDenoising(img, h=8)
+    _, thresh = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     cleaned = cv2.bitwise_not(thresh)
     _, buffer = cv2.imencode('.jpg', cleaned, [cv2.IMWRITE_JPEG_QUALITY, 85])
     return buffer.tobytes()
@@ -45,8 +43,7 @@ def analyze():
 
     cleaned_bytes = cleanup_image(file.read())
 
-    # Stronger, more precise prompt
-   system_prompt = """You are an expert Simultaneous Equations tutor using Biggs & Collis (1982) SOLO Taxonomy.
+    system_prompt = """You are an expert Simultaneous Equations tutor using Biggs & Collis (1982) SOLO Taxonomy.
 
 Classify the student's mastery level strictly into ONE of these 5 levels:
 
@@ -56,9 +53,7 @@ Level 3: Can do both equations but treats them as a list of steps. Uses only one
 Level 4: Understands the relationship between the two equations. Chooses the optimal method most of the time.
 Level 5: Can generalize. Sees the "structure" of the equation instantly and predicts the most efficient path.
 
-For Levels 3, 4, and 5, also generate a simple text-based flow chart.
-
-Return **ONLY** clean JSON:
+Return **ONLY** clean JSON in this exact format:
 
 {
   "problem": "the original two equations",
@@ -66,11 +61,10 @@ Return **ONLY** clean JSON:
   "level": number,
   "level_name": "exact level name",
   "justification": "short reason",
-  "feedback": "helpful scaffolding",
-  "flowchart": "text-based flow chart (only for level 3,4,5). Use simple arrows like → or |"
+  "feedback": "helpful scaffolding"
 }
 
-Now analyze the image and output only the JSON."""
+Analyze the image and output only the JSON."""
 
     try:
         response = client.models.generate_content(
@@ -102,8 +96,8 @@ Now analyze the image and output only the JSON."""
             "extracted_steps": "Not extracted",
             "level": 0,
             "level_name": "Error",
-            "justification": "AI failed to classify",
-            "feedback": "The AI could not read the handwriting clearly. Please try a clearer photo with brighter lighting and darker pen."
+            "justification": "AI failed to read handwriting",
+            "feedback": "The AI could not read the handwriting clearly. Please use brighter lighting, darker pen, and take the photo from directly above the paper."
         }
 
     # Save to MySQL
