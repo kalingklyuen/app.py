@@ -128,5 +128,53 @@ Now analyze the image and output only the JSON."""
     return jsonify(result)
 
 if __name__ == '__main__':
+    @app.route('/dashboard', methods=['GET'])
+def dashboard():
+    try:
+        conn = pymysql.connect(
+            host=MYSQL_HOST,
+            user=MYSQL_USER,
+            password=MYSQL_PASS,
+            db=MYSQL_DB
+        )
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, student_id, level, extracted_steps, feedback, timestamp 
+            FROM mastery_trace 
+            ORDER BY timestamp DESC
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        # Return as nice HTML table
+        html = """
+        <h2>Student Mastery Trace Dashboard</h2>
+        <table border="1" cellpadding="8" cellspacing="0">
+            <tr>
+                <th>ID</th>
+                <th>Student ID</th>
+                <th>SOLO Level</th>
+                <th>Extracted Steps</th>
+                <th>Feedback</th>
+                <th>Time</th>
+            </tr>
+        """
+        for row in rows:
+            html += f"""
+            <tr>
+                <td>{row[0]}</td>
+                <td>{row[1]}</td>
+                <td><b>Level {row[2]}</b></td>
+                <td>{row[3]}</td>
+                <td>{row[4]}</td>
+                <td>{row[5]}</td>
+            </tr>
+            """
+        html += "</table>"
+        return html
+
+    except Exception as e:
+        return f"<h2>Database Error:</h2><p>{str(e)}</p>"
     port = int(os.getenv("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
