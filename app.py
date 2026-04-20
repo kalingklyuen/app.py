@@ -25,9 +25,12 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 def cleanup_image(image_bytes):
     nparr = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)   # Save memory
-    denoised = cv2.fastNlMeansDenoising(img, h=8)
-    _, thresh = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
+    denoised = cv2.fastNlMeansDenoising(img, h=10)
+    enhanced = cv2.equalizeHist(denoised)
+    kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+    sharpened = cv2.filter2D(enhanced, -1, kernel)
+    _, thresh = cv2.threshold(sharpened, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     cleaned = cv2.bitwise_not(thresh)
     _, buffer = cv2.imencode('.jpg', cleaned, [cv2.IMWRITE_JPEG_QUALITY, 85])
     return buffer.tobytes()
@@ -42,28 +45,29 @@ def analyze():
 
     cleaned_bytes = cleanup_image(file.read())
 
+    # Stronger, more precise prompt
     system_prompt = """You are an expert Simultaneous Equations tutor using Biggs & Collis (1982) SOLO Taxonomy.
 
-Classify strictly into ONE level:
+Carefully analyze the handwritten work and classify the student's mastery level **strictly** into ONE of these 5 levels:
 
-Level 1: Student misses the point. Cannot solve a single linear equation (e.g. 2x=10).
-Level 2: Can solve one equation but cannot "link" them.
-Level 3: Can do both equations but treats them as a list of steps. Uses only one method regardless of difficulty.
-Level 4: Understands the relationship. Chooses the optimal method most of the time.
-Level 5: Can generalize. Sees the "structure" instantly and predicts the most efficient path.
+- Level 1 (Pre-structural): Student cannot solve even a single linear equation like 2x=10.
+- Level 2 (Uni-structural): Can solve one equation but cannot link the two equations together.
+- Level 3 (Multi-structural): Can solve both equations but treats them as separate steps. Uses only one rigid method (usually substitution or elimination) no matter the difficulty.
+- Level 4 (Relational): Understands the relationship between the two equations. Chooses the better method depending on the problem (shows flexibility).
+- Level 5 (Extended Abstract): Sees the deep structure instantly, can predict the most efficient path, and can generalize or create new problems.
 
-Return **ONLY** clean JSON:
+Return **ONLY** clean JSON, nothing else:
 
 {
   "problem": "the original two equations",
-  "extracted_steps": "summary of student's solving steps",
-  "level": number,
+  "extracted_steps": "clear summary of what the student did",
+  "level": number from 1 to 5,
   "level_name": "exact level name",
-  "justification": "short reason",
-  "feedback": "helpful scaffolding"
+  "justification": "one short sentence explaining why this level",
+  "feedback": "helpful scaffolding and next steps"
 }
 
-Analyze the image and output only the JSON."""
+Now analyze the image carefully and output only the JSON."""
 
     try:
         response = client.models.generate_content(
@@ -95,8 +99,8 @@ Analyze the image and output only the JSON."""
             "extracted_steps": "Not extracted",
             "level": 0,
             "level_name": "Error",
-            "justification": "AI failed to read handwriting",
-            "feedback": "The AI could not read the handwriting clearly. Please use brighter lighting, darker pen, and take the photo from directly above the paper."
+            "justification": "AI failed to classify",
+            "feedback": "The AI could not read the handwriting clearly. Please try a clearer photo with brighter lighting and darker pen."
         }
 
     # Save to MySQL
@@ -113,7 +117,7 @@ Analyze the image and output only the JSON."""
         cur.close()
         conn.close()
     except Exception as db_e:
-        print("MySQL Error:", str(db_e))
+        print("MySQL Error:", db_e)
 
     return jsonify(result)
 
