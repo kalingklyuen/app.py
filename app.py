@@ -7,31 +7,32 @@ import base64
 import pymysql
 import os
 from datetime import datetime
-from openai import OpenAI   # pip install openai flask flask-cors pymysql opencv-python numpy
+
+import google.generativeai as genai   # New import for Gemini
 
 app = Flask(__name__)
 CORS(app)
 
 # ========================= CONFIG =========================
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")          # Put in Render environment variables
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")   # ← Change this
 MYSQL_HOST = os.getenv("MYSQL_HOST")
 MYSQL_USER = os.getenv("MYSQL_USER")
 MYSQL_PASS = os.getenv("MYSQL_PASS")
 MYSQL_DB   = os.getenv("MYSQL_DB")
 # ========================================================
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+# Initialize Gemini
+genai.configure(api_key=GEMINI_API_KEY)
 
 def cleanup_image(image_bytes):
     """STEP 2: OpenCV Image Cleanup"""
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     
-    # Classic cleanup pipeline
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     denoised = cv2.fastNlMeansDenoising(gray)
     _, thresh = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    cleaned = cv2.bitwise_not(thresh)  # invert for better OCR/LLM
+    cleaned = cv2.bitwise_not(thresh)
     
     _, buffer = cv2.imencode('.jpg', cleaned)
     return buffer.tobytes()
@@ -57,72 +58,77 @@ def save_to_mysql(student_id, level, extracted_steps, feedback):
 def analyze():
     if 'image' not in request.files:
         return jsonify({"error": "No image"}), 400
-    
+   
     file = request.files['image']
     student_id = request.form.get('student_id', 'unknown')
-    
+   
     # STEP 2: OpenCV cleanup
     cleaned_bytes = cleanup_image(file.read())
-    
-    # Convert to base64 for vision LLM
-    b64 = base64.b64encode(cleaned_bytes).decode('utf-8')
-    
-    # STEP 3: SOLO Taxonomy Classification + Scaffolding (Biggs & Collis 1982)
+   
+    # STEP 3: SOLO Taxonomy Classification using Gemini
     system_prompt = """You are an expert Simultaneous Equations tutor using Biggs & Collis (1982) SOLO Taxonomy.
 
 Extract from the image:
 - The original problem (two linear equations)
 - The student's full handwritten steps
 
-Classify strictly into ONE level:
-1. Pre-structural (Foundational Gap) → misses the point, cannot solve even 2x=10
-2. Uni-structural (Isolated Step) → solves one equation but cannot link the two
-3. Multi-structural (Procedural Rigidity) → solves both but only one rigid method
-4. Relational (Strategic Explorer) → chooses optimal method most of the time
-5. Extended Abstract (Strategic Master) → sees structure instantly, can generalize or reverse-engineer
+Classify strictly into ONE level (1 to 5):
+1. Pre-structural (Foundational Gap)
+2. Uni-structural (Isolated Step)
+3. Multi-structural (Procedural Rigidity)
+4. Relational (Strategic Explorer)
+5. Extended Abstract (Strategic Master)
 
-Return clean JSON only:
+Return **clean JSON only** (no extra text):
 {
-  "problem": "2x + 3y = 8, 4x - y = 7",
-  "extracted_steps": "Student wrote...",
+  "problem": "...",
+  "extracted_steps": "...",
   "level": 3,
   "level_name": "Multi-structural (Procedural Rigidity)",
   "justification": "One-sentence reason",
-  "feedback": "Detailed scaffolding exactly matching the level in the flowchart"
+  "feedback": "Detailed scaffolding exactly matching the level..."
 }
-Feedback rules:
+
+Feedback rules (follow strictly):
 • Levels 1-2 → Direct scaffolding: hints on isolating variables & inverse operations
-• Levels 3-4 → Strategic efficiency: show "Path of Least Resistance" flowchart comparison
+• Levels 3-4 → Strategic efficiency: show "Path of Least Resistance" comparison
 • Level 5 → Extended mastery: problem-posing prompts (design your own complex system)
 """
 
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": [
-                {"type": "text", "text": "Analyze this handwritten simultaneous equation work and classify using SOLO Taxonomy."},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
-            ]}
-        ],
-        temperature=0.3,
-        max_tokens=800
-    )
-    
     try:
-        result = eval(response.choices[0].message.content.strip())  # safe JSON from LLM
-    except:
-        result = {"error": "Parsing failed"}
-    
-    # Save to MySQL for teacher dashboard & longitudinal tracking
+        model = genai.GenerativeModel('gemini-3-flash')   # or 'gemini-2.5-flash' if available
+
+        response = model.generate_content([
+            system_prompt,
+            {"mime_type": "image/jpeg", "data": base64.b64encode(cleaned_bytes).decode('utf-8')}
+        ])
+
+        raw_text = response.text.strip()
+        
+        # Try to extract JSON
+        import json
+        # Gemini sometimes adds extra text, so we clean it
+        if raw_text.startswith("```json"):
+            raw_text = raw_text.split("```json")[1].split("```")[0]
+        elif raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+        
+        result = json.loads(raw_text)
+        
+    except Exception as e:
+        print("Gemini error:", e)
+        result = {"error": "Failed to parse response", "raw": str(e)}
+
+    # Save to MySQL
     save_to_mysql(
         student_id=student_id,
         level=result.get("level", 0),
         extracted_steps=result.get("extracted_steps", ""),
         feedback=result.get("feedback", "")
     )
-    
+   
     return jsonify(result)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    port = int(os.getenv("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
