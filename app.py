@@ -8,8 +8,6 @@ import os
 from datetime import datetime
 import json
 
-import easyocr   # ← Added
-
 from google import genai
 
 app = Flask(__name__)
@@ -24,9 +22,6 @@ MYSQL_DB       = os.getenv("MYSQL_DB")
 # ========================================================
 
 client = genai.Client(api_key=GEMINI_API_KEY)
-
-# Initialize EasyOCR (English + Chinese)
-reader = easyocr.Reader(['en', 'ch_sim'], gpu=False, download_enabled=True)
 
 def cleanup_image(image_bytes):
     nparr = np.frombuffer(image_bytes, np.uint8)
@@ -61,7 +56,7 @@ Level 3: Can do both equations but treats them as a list of steps. Uses only one
 Level 4: Understands the relationship between the two equations. Chooses the optimal method most of the time.
 Level 5: Can generalize. Sees the "structure" of the equation instantly and predicts the most efficient path.
 
-Return **ONLY** clean JSON in this exact format:
+Return **ONLY** clean JSON:
 
 {
   "problem": "the original two equations",
@@ -72,10 +67,9 @@ Return **ONLY** clean JSON in this exact format:
   "feedback": "helpful scaffolding"
 }
 
-Analyze and output only the JSON."""
+Analyze the image and output only the JSON."""
 
     try:
-        # Primary: Gemini Vision
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=[
@@ -98,47 +92,16 @@ Analyze and output only the JSON."""
 
         result = json.loads(raw_text)
 
-    except Exception as vision_error:
-        print("Gemini Vision failed, using OCR fallback:", str(vision_error))
-
-        # Fallback: EasyOCR
-        try:
-            img_array = cv2.imdecode(np.frombuffer(cleaned_bytes, np.uint8), cv2.IMREAD_COLOR)
-            ocr_results = reader.readtext(img_array, detail=0)
-            extracted_text = "\n".join(ocr_results)
-
-            text_prompt = f"""Here is the extracted text from a student's handwritten simultaneous equations:
-
-{extracted_text}
-
-Classify the student's mastery level using Biggs & Collis SOLO Taxonomy and return ONLY clean JSON in the same format as above."""
-
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=[text_prompt]
-            )
-
-            raw_text = response.text.strip()
-            # Clean again
-            if "```" in raw_text:
-                raw_text = raw_text.split("```")[1].strip()
-            if "{" in raw_text and "}" in raw_text:
-                start = raw_text.find("{")
-                end = raw_text.rfind("}") + 1
-                raw_text = raw_text[start:end]
-
-            result = json.loads(raw_text)
-
-        except Exception as ocr_error:
-            print("OCR Fallback also failed:", str(ocr_error))
-            result = {
-                "problem": "Not detected",
-                "extracted_steps": "Not extracted",
-                "level": 0,
-                "level_name": "Error",
-                "justification": "Both vision and OCR failed",
-                "feedback": "The AI could not read the handwriting. Please try a clearer photo with brighter lighting, darker pen, and take the photo from directly above the paper."
-            }
+    except Exception as e:
+        print("Gemini Error:", str(e))
+        result = {
+            "problem": "Not detected",
+            "extracted_steps": "Not extracted",
+            "level": 0,
+            "level_name": "Error",
+            "justification": "AI failed to read handwriting",
+            "feedback": "The AI could not read the handwriting clearly. Please use brighter lighting, darker pen, and take the photo from directly above the paper."
+        }
 
     # Save to MySQL
     try:
