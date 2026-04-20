@@ -1,0 +1,2 @@
+pip install flask flask-cors pymysql opencv-python-headless numpy openai python-dotenv gunicorn
+pip freeze > requirements.txt
