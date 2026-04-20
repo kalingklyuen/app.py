@@ -12,12 +12,8 @@ from google import genai
 
 app = Flask(__name__)
 
-# === STRONG CORS FOR WIX ===
-CORS(app, 
-     origins=["*"],
-     methods=["GET", "POST", "OPTIONS"],
-     allow_headers=["Content-Type", "Authorization"],
-     supports_credentials=True)
+# Strong CORS for Wix
+CORS(app, origins=["*"], methods=["GET", "POST", "OPTIONS"], allow_headers=["*"])
 
 # ========================= CONFIG =========================
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -50,23 +46,38 @@ def analyze():
 
     cleaned_bytes = cleanup_image(file.read())
 
-    system_prompt = """You are an expert Simultaneous Equations tutor.
-Analyze the handwritten image and return **ONLY** a valid JSON object. No explanation, no extra text.
+    # === YOUR EXACT SOLO TAXONOMY CRITERIA ===
+    system_prompt = """You are an expert Simultaneous Equations tutor using Biggs & Collis (1982) SOLO Taxonomy.
 
-The JSON must follow this exact structure:
+Classify the student's mastery level strictly into ONE of these 5 levels based on the handwritten work:
+
+Level 1 (Pre-structural / Foundational Gap):
+Student misses the point. Cannot solve a single linear equation (e.g. 2x=10).
+
+Level 2 (Uni-structural / Isolated Step):
+Focuses on one relevant part. Can solve one equation but cannot "link" them.
+
+Level 3 (Multi-structural / Procedural Rigidity):
+Can do both equations but treats them as a list of steps. Uses only one method (e.g., Substitution) regardless of difficulty.
+
+Level 4 (Relational / Strategic Explorer):
+Understands the relationship between the two equations. Chooses the optimal method most of the time.
+
+Level 5 (Extended Abstract / Strategic Master):
+Can generalize. Sees the "structure" of the equation instantly and predicts the most efficient path.
+
+Return **ONLY** clean JSON in this exact format. No extra text, no markdown, no explanation:
 
 {
-  "problem": "Write the original simultaneous equations here",
-  "extracted_steps": "Summarize the student's solving steps clearly",
-  "level": 3,
-  "level_name": "Multi-structural (Procedural Rigidity)",
-  "justification": "One short sentence explaining the level",
-  "feedback": "Write the scaffolding feedback here"
+  "problem": "the original two equations clearly written",
+  "extracted_steps": "clear summary of what the student wrote and did",
+  "level": number from 1 to 5,
+  "level_name": "exact level name as shown above",
+  "justification": "one short sentence explaining why this level",
+  "feedback": "helpful scaffolding and next steps according to the level"
 }
 
-Classify level using Biggs & Collis SOLO Taxonomy (1-5).
-
-Now analyze the image and output only the JSON."""
+Now carefully analyze the handwritten image and output only the JSON."""
 
     try:
         response = client.models.generate_content(
@@ -84,6 +95,7 @@ Now analyze the image and output only the JSON."""
 
         raw_text = response.text.strip()
 
+        # Aggressive JSON cleaning
         if "```" in raw_text:
             raw_text = raw_text.split("```")[1].strip()
             if raw_text.startswith("json"):
@@ -104,7 +116,7 @@ Now analyze the image and output only the JSON."""
             "level": 0,
             "level_name": "Error",
             "justification": "AI failed to return valid JSON",
-            "feedback": "The AI could not parse the handwriting properly."
+            "feedback": "The AI could not parse the handwriting properly. Please try a clearer photo with better lighting and darker handwriting."
         }
 
     # Save to MySQL
@@ -126,23 +138,28 @@ Now analyze the image and output only the JSON."""
     return jsonify(result)
 
 
+# Dashboard Route
 @app.route('/dashboard', methods=['GET'])
 def dashboard():
     try:
         conn = pymysql.connect(host=MYSQL_HOST, user=MYSQL_USER, password=MYSQL_PASS, db=MYSQL_DB)
         cur = conn.cursor()
-        cur.execute("SELECT id, student_id, level, extracted_steps, feedback, timestamp FROM mastery_trace ORDER BY timestamp DESC")
+        cur.execute("""
+            SELECT id, student_id, level, extracted_steps, feedback, timestamp 
+            FROM mastery_trace 
+            ORDER BY timestamp DESC
+        """)
         rows = cur.fetchall()
         cur.close()
         conn.close()
 
-        html = "<h2>Student Mastery Trace Dashboard</h2><table border='1' cellpadding='8'><tr><th>ID</th><th>Student</th><th>Level</th><th>Steps</th><th>Feedback</th><th>Time</th></tr>"
+        html = "<h2>📊 Student Mastery Trace Dashboard</h2><table border='1' cellpadding='8' cellspacing='0'><tr><th>ID</th><th>Student ID</th><th>Level</th><th>Steps</th><th>Feedback</th><th>Time</th></tr>"
         for row in rows:
-            html += f"<tr><td>{row[0]}</td><td>{row[1]}</td><td>Level {row[2]}</td><td>{row[3][:100]}...</td><td>{row[4][:100]}...</td><td>{row[5]}</td></tr>"
+            html += f"<tr><td>{row[0]}</td><td>{row[1]}</td><td>Level {row[2]}</td><td>{str(row[3])[:100]}...</td><td>{str(row[4])[:100]}...</td><td>{row[5]}</td></tr>"
         html += "</table>"
         return html
     except Exception as e:
-        return f"<h2>Error:</h2><p>{str(e)}</p>"
+        return f"<h2>Database Error:</h2><p>{str(e)}</p>"
 
 
 if __name__ == '__main__':
